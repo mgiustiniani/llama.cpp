@@ -1,0 +1,107 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_NV_explicit_typecast : require
+
+layout (push_constant) uniform parameter {
+    uint ne00;
+    uint ne01;
+    uint ne02;
+    uint ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint n_rot;
+    uint padding;
+} p;
+
+layout (binding = 0) readonly buffer SRC0 { float src0_data[]; };
+layout (binding = 1) writeonly buffer DST { float dst_data[]; };
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+shared float scratch[64];
+
+float dsv4_e4m3fn_value(uint i) {
+    uint exp = (i >> 3u) & 0x0Fu;
+    uint mant = i & 0x07u;
+    if (exp == 0u) {
+        return float(mant) * 0.001953125f;
+    } else {
+        return (1.0f + float(mant) * 0.125f) * exp2(float(exp - 7));
+    }
+}
+
+float dsv4_e4m3fn_dequant(float x) {
+    float sign = x < 0.0f ? -1.0f : 1.0f;
+    float ax = min(abs(x), 448.0f);
+    
+    int best = 0;
+    float best_diff = ax;
+    
+    for (int i = 1; i < 127; ++i) {
+        float val = dsv4_e4m3fn_value(uint(i));
+        float diff = abs(ax - val);
+        if (diff < best_diff || (diff == best_diff && (i & 1) == 0 && (best & 1) != 0)) {
+            best = i;
+            best_diff = diff;
+        }
+    }
+    
+    return sign * dsv4_e4m3fn_value(uint(best));
+}
+
+void main() {
+    uint row = uint(gl_GlobalInvocationID.x);
+    uint n_rows = p.ne01 * p.ne02 * p.ne03;
+    
+    if (row >= n_rows) {
+        return;
+    }
+    
+    uint i1 = row % p.ne01;
+    uint i2 = (row / p.ne01) % p.ne02;
+    uint i3 = row / (p.ne01 * p.ne02);
+    
+    uint src_base = i1 * uint(p.nb01) + i2 * uint(p.nb02) + i3 * uint(p.nb03);
+    uint dst_base = i1 * uint(p.nb1) + i2 * uint(p.nb2) + i3 * uint(p.nb3);
+    
+    uint n_nope = p.ne00 - p.n_rot;
+    
+    for (uint off = 0u; off < n_nope; off += 64u) {
+        float v = 0.0f;
+        if (gl_LocalInvocationID.x < 64u) {
+            uint src_offset = src_base + (off + gl_LocalInvocationID.x) * uint(p.nb00);
+            v = src0_data[src_offset];
+            scratch[gl_LocalInvocationID.x] = abs(v);
+        }
+        barrier();
+        
+        for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+            if (gl_LocalInvocationID.x < stride) {
+                scratch[gl_LocalInvocationID.x] = max(scratch[gl_LocalInvocationID.x], scratch[gl_LocalInvocationID.x + stride]);
+            }
+            barrier();
+        }
+        
+        float amax = max(scratch[0], 1.0e-4f);
+        float scale = exp2(log2(amax / 448.0f) + 0.5f);
+        if (gl_LocalInvocationID.x < 64u) {
+            uint src_offset = src_base + (off + gl_LocalInvocationID.x) * uint(p.nb00);
+            uint dst_offset = dst_base + (off + gl_LocalInvocationID.x) * uint(p.nb0);
+            float q = dsv4_e4m3fn_dequant(clamp(v / scale, -448.0f, 448.0f)) * scale;
+            dst_data[dst_offset] = q;
+        }
+        barrier();
+    }
+    
+    for (uint i = n_nope + gl_LocalInvocationID.x; i < p.ne00; i += 64u) {
+        uint src_offset = src_base + i * uint(p.nb00);
+        uint dst_offset = dst_base + i * uint(p.nb0);
+        dst_data[dst_offset] = src0_data[src_offset];
+    }
+}

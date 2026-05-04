@@ -40,14 +40,6 @@
 #include <TargetConditionals.h>
 #endif
 
-#ifdef _WIN32
-#    define llama_mmap_ftell _ftelli64
-#    define llama_mmap_fseek _fseeki64
-#else
-#    define llama_mmap_ftell ftello
-#    define llama_mmap_fseek fseeko
-#endif
-
 // TODO: consider moving to llama-impl.h if needed in more places
 #if defined(_WIN32)
 static std::string llama_format_win_err(DWORD err) {
@@ -234,7 +226,7 @@ struct llama_file::impl {
 
     size_t tell() const {
         if (fd == -1) {
-            off_t ret = llama_mmap_ftell(fp);
+            long ret = std::ftell(fp);
             if (ret == -1) {
                 throw std::runtime_error(format("ftell error: %s", strerror(errno)));
             }
@@ -252,7 +244,7 @@ struct llama_file::impl {
     void seek(size_t offset, int whence) const {
         off_t ret = 0;
         if (fd == -1) {
-            ret = llama_mmap_fseek(fp, offset, whence);
+            ret = std::fseek(fp, (long) offset, whence);
         } else {
             ret = lseek(fd, offset, whence);
         }

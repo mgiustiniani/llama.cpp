@@ -1,0 +1,63 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_NV_explicit_typecast : require
+
+layout (push_constant) uniform parameter {
+    uint n_embd;
+    uint n_hc;
+    uint n_tokens;
+    uint64_t nb_block0;
+    uint64_t nb_block1;
+    uint64_t nb_res0;
+    uint64_t nb_res1;
+    uint64_t nb_res2;
+    uint64_t nb_post0;
+    uint64_t nb_post1;
+    uint64_t nb_comb0;
+    uint64_t nb_comb1;
+    uint64_t nb_comb2;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+} p;
+
+layout (binding = 0) readonly buffer BLOCK_OUT { float block_out_data[]; };
+layout (binding = 1) readonly buffer RESIDUAL { float residual_data[]; };
+layout (binding = 2) readonly buffer POST { float post_data[]; };
+layout (binding = 3) readonly buffer COMB { float comb_data[]; };
+layout (binding = 4) writeonly buffer DST { float dst_data[]; };
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint64_t n_elem = (uint64_t)p.n_embd * (uint64_t)p.n_hc * (uint64_t)p.n_tokens;
+    if (gid >= n_elem) {
+        return;
+    }
+
+    uint d = gid % p.n_embd;
+    uint tmp = gid / p.n_embd;
+    uint dst_hc = tmp % p.n_hc;
+    uint t = tmp / p.n_hc;
+
+    uint block_offset = d * uint(p.nb_block0) + t * uint(p.nb_block1);
+    uint post_offset = dst_hc * uint(p.nb_post0) + t * uint(p.nb_post1);
+    uint dst_offset = d * uint(p.nb0) + dst_hc * uint(p.nb1) + t * uint(p.nb2);
+
+    float block_v = block_out_data[block_offset];
+    float post_v = post_data[post_offset];
+
+    float acc = block_v * post_v;
+
+    // We need to loop over src_hc, but need the correct offset calculation
+    // comb[dst_hc][src_hc][t] = dst_hc*nb_comb0 + src_hc*nb_comb1 + t*nb_comb2
+    // residual[d][src_hc][t] = d*nb_res0 + src_hc*nb_res1 + t*nb_res2
+    for (uint src_hc = 0u; src_hc < p.n_hc; ++src_hc) {
+        uint comb_src_offset = dst_hc * uint(p.nb_comb0) + src_hc * uint(p.nb_comb1) + t * uint(p.nb_comb2);
+        uint res_src_offset = d * uint(p.nb_res0) + src_hc * uint(p.nb_res1) + t * uint(p.nb_res2);
+        acc += comb_data[comb_src_offset] * residual_data[res_src_offset];
+    }
+
+    dst_data[dst_offset] = acc;
+}

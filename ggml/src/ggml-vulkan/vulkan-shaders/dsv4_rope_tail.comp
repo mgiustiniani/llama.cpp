@@ -1,0 +1,136 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_NV_explicit_typecast : require
+
+layout (push_constant) uniform parameter {
+    uint ne00;
+    uint ne01;
+    uint ne02;
+    uint ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint n_dims;
+    uint mode;
+    uint n_ctx_orig;
+    uint inverse;
+    float freq_base;
+    float freq_scale;
+    float ext_factor;
+    float attn_factor;
+    float beta_fast;
+    float beta_slow;
+    uint has_src2;
+} p;
+
+layout (binding = 0) readonly buffer SRC0 { float src0_data[]; };
+layout (binding = 1) readonly buffer SRC1 { uint src1_data[]; };
+layout (binding = 2) readonly buffer SRC2 { float src2_data[]; };
+layout (binding = 3) buffer DST { float dst_data[]; };
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+shared float cos_cache[256];
+shared float sin_cache[256];
+
+float rope_yarn_ramp(float low, float high, uint i0) {
+    float y = (float(i0) / 2.0f - low) / max(0.001f, high - low);
+    return 1.0f - min(1.0f, max(0.0f, y));
+}
+
+void rope_yarn(float theta_extrap, uint i0, inout float cos_theta, inout float sin_theta) {
+    float mscale = p.attn_factor;
+    float theta_interp = p.freq_scale * theta_extrap;
+    float theta = theta_interp;
+    if (p.ext_factor != 0.0f) {
+        float ramp_mix = rope_yarn_ramp(p.beta_fast, p.beta_slow, i0) * p.ext_factor;
+        theta = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
+        mscale *= 1.0f + 0.1f * log(1.0f / p.freq_scale);
+    }
+    if (p.inverse != 0u) {
+        theta = -theta;
+    }
+    cos_theta = cos(theta) * mscale;
+    sin_theta = sin(theta) * mscale;
+}
+
+void main() {
+    uint i0 = uint(gl_GlobalInvocationID.x);
+    uint n_rows = p.ne01 * p.ne02 * p.ne03;
+    
+    if (i0 >= n_rows) {
+        return;
+    }
+    
+    uint i1 = i0 % p.ne01;
+    uint i2 = (i0 / p.ne01) % p.ne02;
+    uint i3 = i0 / (p.ne01 * p.ne02);
+    
+    uint n_nope = p.ne00 - p.n_dims;
+    if (n_nope > p.ne00) {
+        return;
+    }
+    
+    uint pos = src1_data[i2];
+    float theta_base = p.freq_base;
+    
+    // Precompute the nope part (unchanged)
+    uint src_nope_base = i1 * uint(p.nb01) + i2 * uint(p.nb02) + i3 * uint(p.nb03);
+    uint dst_nope_base = i1 * uint(p.nb1) + i2 * uint(p.nb2) + i3 * uint(p.nb3);
+    
+    // Process RoPE tail dimensions
+    float inv_ndims = -1.0f / float(p.n_dims);
+    uint src_tail_base = src_nope_base + uint(p.n_dims) * uint(p.nb00);
+    uint dst_tail_base = dst_nope_base + uint(p.n_dims) * uint(p.nb0);
+    
+    for (uint d = gl_LocalInvocationID.x; d < uint(p.n_dims); d += 256u) {
+        uint pair = d / 2u;
+        float theta = theta_base * exp(float(pair) * inv_ndims);
+        
+        float cos_theta, sin_theta;
+        if (p.mode == 0u || (p.mode >= 100u && p.mode <= 199u)) {
+            // Standard rope
+            cos_theta = cos(theta);
+            sin_theta = sin(theta);
+        } else if (p.mode >= 200u && p.mode <= 299u) {
+            // RoPE YARN
+            float theta_extrap = theta_base * exp((float(pair) - float(n_nope) * 0.4f) * inv_ndims);
+            rope_yarn(theta_extrap, uint(pair), cos_theta, sin_theta);
+        } else if (p.mode == 300u) {
+            // Vision rope
+            float scale_factor = pow(100.0f, inv_ndims);
+            theta = p.freq_scale * theta * scale_factor;
+            cos_theta = cos(theta);
+            sin_theta = sin(theta);
+        }
+        
+        // Load pairs and apply rotation
+        uint src_idx0 = src_tail_base + d * uint(p.nb00);
+        uint src_idx1 = src_tail_base + (d + 1u) * uint(p.nb00);
+        uint dst_idx0 = dst_tail_base + d * uint(p.nb0);
+        uint dst_idx1 = dst_tail_base + (d + 1u) * uint(p.nb0);
+        
+        float x0 = src0_data[src_idx0];
+        float x1 = src0_data[src_idx1];
+        
+        dst_data[dst_idx0] = x0 * cos_theta - x1 * sin_theta;
+        dst_data[dst_idx1] = x0 * sin_theta + x1 * cos_theta;
+    }
+    
+    // If src2 exists, apply scaling/offset
+    if (p.has_src2 != 0u) {
+        uint src2_base = i1 * uint(p.nb01) + i2 * uint(p.nb02) + i3 * uint(p.nb03);
+        for (uint d = gl_LocalInvocationID.x; d < p.ne00; d += 256u) {
+            uint src_idx = src2_base + d * uint(p.nb00);
+            float scale = src2_data[src_idx * 2u];
+            float offset = src2_data[src_idx * 2u + 1u];
+            uint dst_idx = dst_nope_base + d * uint(p.nb0);
+            dst_data[dst_idx] = dst_data[dst_idx] * scale + offset;
+        }
+    }
+}

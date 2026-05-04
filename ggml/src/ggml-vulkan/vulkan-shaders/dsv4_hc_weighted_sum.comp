@@ -1,0 +1,42 @@
+#version 460
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_NV_explicit_typecast : require
+
+layout (push_constant) uniform parameter {
+    uint n_embd;
+    uint n_hc;
+    uint n_tokens;
+    uint nb_x0, nb_x1, nb_x2;
+    uint nb_w0, nb_w1;
+    uint nb0, nb1;
+} p;
+
+layout (binding = 0) readonly buffer X { float x_data[]; };
+layout (binding = 1) readonly buffer W { float w_data[]; };
+layout (binding = 2) writeonly buffer DST { float dst_data[]; };
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint64_t n_elem = (uint64_t)p.n_embd * (uint64_t)p.n_hc * (uint64_t)p.n_tokens;
+    
+    if (gid >= n_elem) {
+        return;
+    }
+    
+    uint d = gid % p.n_embd;
+    uint tmp = gid / p.n_embd;
+    uint dst_hc = tmp % p.n_hc;
+    uint t = tmp / p.n_hc;
+    
+    // x[d, t] with strides nb_x0, nb_x1, nb_x2
+    uint x_offset = d * p.nb_x0 + t * p.nb_x1;
+    float x_val = x_data[x_offset];
+    
+    // w[dst_hc, t] with strides nb_w0, nb_w1
+    uint w_offset = dst_hc * p.nb_w0 + t * p.nb_w1;
+    float w_val = w_data[w_offset];
+    
+    dst_data[d * p.nb0 + dst_hc * p.nb1 + t * p.nb_x2] = x_val * w_val;
+}

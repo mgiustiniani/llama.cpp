@@ -957,6 +957,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
             case GGML_OP_GATED_DELTA_NET: {
                 split_state = handle_gated_delta_net(src_ss);
             } break;
+            case GGML_OP_DSV4_HC_SPLIT_SINKHORN:
+            case GGML_OP_DSV4_HC_WEIGHTED_SUM:
+            case GGML_OP_DSV4_HC_EXPAND:
+            case GGML_OP_DSV4_FP8_KV_QUANTIZE:
+            case GGML_OP_DSV4_ROPE_TAIL:
             case GGML_OP_UNARY: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
@@ -1205,57 +1210,40 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
 
     if (split_state.n_segments != 1) {
         GGML_ASSERT(split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS);
+        GGML_ASSERT(offset == 0);
+        GGML_ASSERT(size == ggml_nbytes(tensor));
         GGML_ASSERT(tensor->ne[3] == 1);
-
         size_t offset_data = 0;
         std::vector<size_t> simple_offsets(n_bufs, 0);
         if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_0) {
             GGML_ASSERT(tensor->ne[2] == 1);
-
-            const size_t row_stride = tensor->nb[1];
-            GGML_ASSERT(offset % row_stride == 0);
-            GGML_ASSERT(size   % row_stride == 0);
-            const int64_t r_start = offset / row_stride;
-            const int64_t r_count = size   / row_stride;
-            GGML_ASSERT(r_start + r_count <= tensor->ne[1]);
-
             const int64_t blck_size = ggml_blck_size(tensor->type);
             for (size_t s = 0; s < split_state.n_segments; s++) {
                 for (size_t j = 0; j < n_bufs; j++) {
                     ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                     GGML_ASSERT(split_state.ne[s*n_bufs + j] % blck_size == 0);
                     const size_t nbytes = split_state.ne[s*n_bufs + j]/blck_size * tensor->nb[0];
-                    ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_data,
-                        simple_offsets[j] + r_start * simple_tensor->nb[1], nbytes,
-                        r_count, simple_tensor->nb[1], tensor->nb[1]);
+                    ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_data, simple_offsets[j], nbytes,
+                        tensor->ne[1], simple_tensor->nb[1], tensor->nb[1]);
                     offset_data       += nbytes;
                     simple_offsets[j] += nbytes;
                 }
             }
-            GGML_ASSERT(offset_data*r_count == size);
+            GGML_ASSERT(offset_data*tensor->ne[1] == size);
             return;
         }
         GGML_ASSERT(split_state.axis == GGML_BACKEND_SPLIT_AXIS_1);
-
-        const size_t row_stride = tensor->nb[2];
-        GGML_ASSERT(offset % row_stride == 0);
-        GGML_ASSERT(size   % row_stride == 0);
-        const int64_t r_start = offset / row_stride;
-        const int64_t r_count = size   / row_stride;
-        GGML_ASSERT(r_start + r_count <= tensor->ne[2]);
-
         for (size_t s = 0; s < split_state.n_segments; s++) {
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                 const size_t nbytes = split_state.ne[s*n_bufs + j] * tensor->nb[1];
-                ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_data,
-                    simple_offsets[j] + r_start * simple_tensor->nb[2], nbytes,
-                    r_count, simple_tensor->nb[2], tensor->nb[2]);
+                ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_data, simple_offsets[j], nbytes,
+                    tensor->ne[2], simple_tensor->nb[2], tensor->nb[2]);
                 offset_data       += nbytes;
                 simple_offsets[j] += nbytes;
             }
         }
-        GGML_ASSERT(offset_data*r_count == size);
+        GGML_ASSERT(offset_data*tensor->ne[2] == size);
         return;
     }
 
@@ -1312,57 +1300,40 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
 
     if (split_state.n_segments != 1) {
         GGML_ASSERT(split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS);
+        GGML_ASSERT(offset == 0);
+        GGML_ASSERT(size == ggml_nbytes(tensor));
         GGML_ASSERT(tensor->ne[3] == 1);
-
         size_t offset_data = 0;
         std::vector<size_t> simple_offsets(n_bufs, 0);
         if (split_state.axis == GGML_BACKEND_SPLIT_AXIS_0) {
             GGML_ASSERT(tensor->ne[2] == 1);
-
-            const size_t row_stride = tensor->nb[1];
-            GGML_ASSERT(offset % row_stride == 0);
-            GGML_ASSERT(size   % row_stride == 0);
-            const int64_t r_start = offset / row_stride;
-            const int64_t r_count = size   / row_stride;
-            GGML_ASSERT(r_start + r_count <= tensor->ne[1]);
-
             const int64_t blck_size = ggml_blck_size(tensor->type);
             for (size_t s = 0; s < split_state.n_segments; s++) {
                 for (size_t j = 0; j < n_bufs; j++) {
                     const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                     GGML_ASSERT(split_state.ne[s*n_bufs + j] % blck_size == 0);
                     const size_t nbytes = split_state.ne[s*n_bufs + j]/blck_size * tensor->nb[0];
-                    ggml_backend_tensor_get_2d(simple_tensor, (char *) data + offset_data,
-                        simple_offsets[j] + r_start * simple_tensor->nb[1], nbytes,
-                        r_count, simple_tensor->nb[1], tensor->nb[1]);
+                    ggml_backend_tensor_get_2d(simple_tensor, (char *) data + offset_data, simple_offsets[j], nbytes,
+                        tensor->ne[1], simple_tensor->nb[1], tensor->nb[1]);
                     offset_data       += nbytes;
                     simple_offsets[j] += nbytes;
                 }
             }
-            GGML_ASSERT(offset_data*r_count == size);
+            GGML_ASSERT(offset_data*tensor->ne[1] == size);
             return;
         }
         GGML_ASSERT(split_state.axis == GGML_BACKEND_SPLIT_AXIS_1);
-
-        const size_t row_stride = tensor->nb[2];
-        GGML_ASSERT(offset % row_stride == 0);
-        GGML_ASSERT(size   % row_stride == 0);
-        const int64_t r_start = offset / row_stride;
-        const int64_t r_count = size   / row_stride;
-        GGML_ASSERT(r_start + r_count <= tensor->ne[2]);
-
         for (size_t s = 0; s < split_state.n_segments; s++) {
             for (size_t j = 0; j < n_bufs; j++) {
                 const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                 const size_t nbytes = split_state.ne[s*n_bufs + j] * tensor->nb[1];
-                ggml_backend_tensor_get_2d(simple_tensor, (char *) data + offset_data,
-                    simple_offsets[j] + r_start * simple_tensor->nb[2], nbytes,
-                    r_count, simple_tensor->nb[2], tensor->nb[2]);
+                ggml_backend_tensor_get_2d(simple_tensor, (char *) data + offset_data, simple_offsets[j], nbytes,
+                    tensor->ne[2], simple_tensor->nb[2], tensor->nb[2]);
                 offset_data       += nbytes;
                 simple_offsets[j] += nbytes;
             }
         }
-        GGML_ASSERT(offset_data*r_count == size);
+        GGML_ASSERT(offset_data*tensor->ne[2] == size);
         return;
     }
 
@@ -1826,24 +1797,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     continue;
                 }
 
-                const int i_delayed = get_i_delayed(i);
-
-                // If we can delay the AllReduce we need to consider the interaction with zero-sized tensor slices.
-                // A backend with such a slice would normally have valid data after participating in the AllReduce with a node that has
-                //     its compute flag disabled and thus gets its data zeroed out.
-                // If the AllReduce is delayed then the nodes until that point also need to have their compute flag disabled.
-                if (i_delayed > i) {
-                    for (size_t j = 0; j < n_backends; j++) {
-                        auto & bcj = backend_ctx->backend_configs[j];
-                        if ((bcj.nodes[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-                            for (int ii = i + 1; ii <= i_delayed; ii++) {
-                                bcj.nodes[ii]->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
-                            }
-                        }
-                    }
-                }
-
-                i = i_delayed;
+                i = get_i_delayed(i);
 
                 for (size_t j = 0; j < n_backends; j++) {
                     auto & bcj = backend_ctx->backend_configs[j];
@@ -2100,8 +2054,8 @@ static const ggml_backend_i ggml_backend_meta_i = {
     /* .free                    = */ ggml_backend_meta_free,
     /* .set_tensor_async        = */ ggml_backend_meta_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_meta_get_tensor_async,
-    /* .set_tensor_2d_async     = */ nullptr,
     /* .get_tensor_2d_async     = */ nullptr,
+    /* .set_tensor_2d_async     = */ nullptr,
     /* .cpy_tensor_async        = */ nullptr,
     /* .synchronize             = */ ggml_backend_meta_synchronize,
     /* .graph_plan_create       = */ nullptr,
@@ -2140,4 +2094,3 @@ ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, siz
     const ggml_backend_meta_context * backend_ctx = (const ggml_backend_meta_context *) meta_backend->context;
     return backend_ctx->backend_configs[index].backend;
 }
-

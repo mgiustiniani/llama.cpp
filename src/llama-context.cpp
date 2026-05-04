@@ -399,7 +399,7 @@ void llama_context::sched_reserve() {
 
     const int64_t t_start_us = ggml_time_us();
 
-    const uint32_t n_seqs = cparams.n_seq_max;
+    const uint32_t n_seqs = model.arch == LLM_ARCH_DEEPSEEK4 ? 1 : cparams.n_seq_max;
     const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
     const size_t max_nodes = this->graph_max_nodes(n_tokens);
@@ -573,6 +573,22 @@ void llama_context::sched_reserve() {
 
         n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
         n_nodes_pp  = ggml_graph_n_nodes(gf);
+    }
+
+    // DeepSeek V4 resumed-prompt chunks use the compressed-attention decode
+    // graph, which is larger than the position-zero prefill graph.
+    if (model.arch == LLM_ARCH_DEEPSEEK4 && n_tokens > 1) {
+        const llama_pos reserve_pos0 = std::min<llama_pos>(
+                cparams.n_ctx > n_tokens ? cparams.n_ctx - n_tokens : n_tokens,
+                std::max<uint32_t>(cparams.n_batch, 8u*n_tokens));
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+                model.hparams.no_alloc, nullptr, reserve_pos0);
+        if (!gf) {
+            throw std::runtime_error("failed to allocate DeepSeek V4 resumed pp buffers");
+        }
+
+        n_splits_pp = std::max(n_splits_pp, ggml_backend_sched_get_n_splits(sched.get()));
+        n_nodes_pp  = std::max(n_nodes_pp,  ggml_graph_n_nodes(gf));
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
@@ -2073,6 +2089,15 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR || model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
+    if (model.arch == LLM_ARCH_DEEPSEEK4) {
+        // DeepSeek V4 has a position-dependent compressed-attention decode path
+        // that creates many temporary tensor objects, especially when a long
+        // prompt is split into non-prefill ubatches. The visible graph node
+        // count is much smaller than the number of GGML objects allocated while
+        // building those graphs, so reserve a larger metadata arena than the
+        // generic tensor-count heuristic would provide.
+        return std::max<uint32_t>(524288u, n_tokens * 192 + 64u * model.n_tensors());
+    }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {
         res += lora->get_n_nodes();
@@ -2085,7 +2110,7 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 ggml_cgraph * llama_context::graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes, llama_pos pos0) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -2109,6 +2134,14 @@ ggml_cgraph * llama_context::graph_reserve(
 
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+    if (pos0 != 0 && ubatch.pos != nullptr) {
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            ubatch.pos[i*ubatch.n_pos] = pos0 + i;
+            for (uint32_t j = 1; j < ubatch.n_pos; ++j) {
+                ubatch.pos[i*ubatch.n_pos + j] = 0;
+            }
+        }
+    }
 
     // set one output token per sequence in order to activate all backend samplers
     std::vector<llama_seq_id> seq_ids(n_seqs);
@@ -2253,28 +2286,6 @@ public:
     llama_io_write_buffer(
             uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
-    ~llama_io_write_buffer() {
-#if 1
-        // TODO: add backend support to batch tensor_get? or some other way to speed this up
-        for (const auto & info : winfos) {
-            ggml_backend_tensor_get(info.tensor, info.ptr, info.offset, info.size);
-        }
-#else
-        // flush the writes asynchronously
-        // this helps on Macs, but on other devices - it does not. just an example
-        std::vector<std::future<void>> futures;
-        futures.reserve(winfos.size());
-        for (const auto & info : winfos) {
-            futures.push_back(std::async(std::launch::async, [info]() {
-                ggml_backend_tensor_get(info.tensor, info.ptr, info.offset, info.size);
-            }));
-        }
-        for (auto & f : futures) {
-            f.wait();
-        }
-#endif
-    }
-
     void write(const void * src, size_t size) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
@@ -2289,10 +2300,7 @@ public:
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
-
-        // save the write for later during destruction
-        winfos.push_back({tensor, ptr, size, offset});
-
+        ggml_backend_tensor_get(tensor, ptr, offset, size);
         ptr += size;
         size_written += size;
         buf_size -= size;
@@ -2306,48 +2314,25 @@ private:
     uint8_t * ptr;
     size_t buf_size = 0;
     size_t size_written = 0;
-
-    struct write_info {
-        const ggml_tensor * tensor;
-        uint8_t * ptr;
-        size_t size;
-        size_t offset;
-    };
-    std::vector<write_info> winfos;
 };
 
 class llama_io_read_buffer : public llama_io_read_i {
 public:
     llama_io_read_buffer(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
-    ~llama_io_read_buffer() {
-        // flush the reads
-        for (const auto & info : rinfos) {
-            ggml_backend_tensor_set(info.tensor, info.ptr, info.offset, info.size);
-        }
-    }
-
-    void read(void * dst, size_t size) override {
+    const uint8_t * read(size_t size) override {
+        const uint8_t * base_ptr = ptr;
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
-        memcpy(dst, ptr, size);
         ptr += size;
         size_read += size;
         buf_size -= size;
+        return base_ptr;
     }
 
-    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
-        if (size > buf_size) {
-            throw std::runtime_error("unexpectedly reached end of buffer");
-        }
-
-        // save for later during destruction
-        rinfos.push_back({tensor, ptr, size, offset});
-
-        ptr += size;
-        size_read += size;
-        buf_size -= size;
+    void read_to(void * dst, size_t size) override {
+        memcpy(dst, read(size), size);
     }
 
     size_t n_bytes() override {
@@ -2358,14 +2343,6 @@ private:
     const uint8_t * ptr;
     size_t buf_size = 0;
     size_t size_read = 0;
-
-    struct read_info {
-        ggml_tensor * tensor;
-        const uint8_t * ptr;
-        size_t size;
-        size_t offset;
-    };
-    std::vector<read_info> rinfos;
 };
 
 class llama_io_write_file : public llama_io_write_i {
@@ -2397,15 +2374,15 @@ class llama_io_read_file : public llama_io_read_i {
 public:
     llama_io_read_file(llama_file * f) : file(f) {}
 
-    void read(void * dst, size_t size) override {
+    void read_to(void * dst, size_t size) override {
         file->read_raw(dst, size);
         size_read += size;
     }
 
-    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+    const uint8_t * read(size_t size) override {
         temp_buffer.resize(size);
-        read(temp_buffer.data(), size);
-        ggml_backend_tensor_set(tensor, temp_buffer.data(), offset, size);
+        read_to(temp_buffer.data(), size);
+        return temp_buffer.data();
     }
 
     size_t n_bytes() override {

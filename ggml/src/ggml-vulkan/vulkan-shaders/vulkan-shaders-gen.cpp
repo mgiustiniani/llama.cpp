@@ -1025,6 +1025,13 @@ void process_shaders() {
 
     string_to_spv("topk_moe_f32", "topk_moe.comp", {});
 
+    // DS4V (DeepSeek V4) shaders
+    string_to_spv("dsv4_hc_split_sinkhorn_f32", "dsv4_hc_split_sinkhorn.comp", {});
+    string_to_spv("dsv4_hc_weighted_sum_f32", "dsv4_hc_weighted_sum.comp", {});
+    string_to_spv("dsv4_hc_expand_f32", "dsv4_hc_expand.comp", {});
+    string_to_spv("dsv4_fp8_kv_quantize_f32", "dsv4_fp8_kv_quantize.comp", {});
+    string_to_spv("dsv4_rope_tail_f32", "dsv4_rope_tail.comp", {});
+
     for (auto &c : compiles) {
         c.wait();
     }
