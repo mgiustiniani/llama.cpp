@@ -13,8 +13,18 @@ __device__ float dsv4_fp8_e4m3fn_quant(float x) {
         int exp = (i >> 3) & 0x0f;
         int mant = i & 0x07;
         float val = exp == 0
+#ifdef GGML_USE_HIP
+            ? *(float *)&mant / 512.0f  // mant / 2^9 — __ldg not supported by HIP
+#else
             ? __ldg((float *)&mant) / 512.0f  // mant / 2^9
-            : __ldg((float *)&mant) / 8.0f + 1.0f;
+#endif
+            : (
+#ifdef GGML_USE_HIP
+                *(float *)&mant / 8.0f + 1.0f
+#else
+                __ldg((float *)&mant) / 8.0f + 1.0f
+#endif
+            );
         val = ldexpf(val, exp - 7);
 
         float diff = fabsf(ax - val);
@@ -27,8 +37,18 @@ __device__ float dsv4_fp8_e4m3fn_quant(float x) {
     int exp = (best >> 3) & 0x0f;
     int mant = best & 0x07;
     float val = exp == 0
+#ifdef GGML_USE_HIP
+        ? *(float *)&mant / 512.0f
+#else
         ? __ldg((float *)&mant) / 512.0f
-        : (__ldg((float *)&mant) / 8.0f + 1.0f);
+#endif
+        : (
+#ifdef GGML_USE_HIP
+            *(float *)&mant / 8.0f + 1.0f
+#else
+            __ldg((float *)&mant) / 8.0f + 1.0f
+#endif
+        );
     val = ldexpf(val, exp - 7);
 
     return sign * val;
