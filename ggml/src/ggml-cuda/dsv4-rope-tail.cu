@@ -1,5 +1,21 @@
 #include "dsv4-rope-tail.cuh"
 #include "ggml-impl.h"
+#include "ggml-cuda/common.cuh"
+
+struct rope_corr_dims {
+    float v[2];
+};
+
+// Half to float / float to half conversion helpers for HIP/CUDA
+template<typename T>
+__device__ inline float to_float(T v) { return (float)v; }
+template<>
+__device__ inline float to_float<half>(half v) { return __half2float(v); }
+
+template<typename D>
+__device__ inline D from_float(float v) { return (D)v; }
+template<>
+__device__ inline half from_float<half>(float v) { return __float2half(v); }
 
 // DS4V RoPE tail kernel - only applies RoPE to the tail portion
 template<typename T, typename D>
@@ -47,9 +63,7 @@ static __global__ void dsv4_rope_tail_kernel(
 
     // Copy the nope prefix unchanged
     if (n_nope > 0 && i0 < n_nope) {
-        D val;
-        ggml_cuda_type_traits<T>::convert(val, *src_ptr);
-        *dst_ptr = val;
+        *dst_ptr = *src_ptr;
         return;
     }
 
@@ -95,15 +109,15 @@ static __global__ void dsv4_rope_tail_kernel(
     const T *src_ptr_odd = (const T *)((const char *)src + i0_odd * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3);
 
     float x0, x1;
-    ggml_cuda_type_traits<T>::convert(x0, *src_ptr_even);
-    ggml_cuda_type_traits<T>::convert(x1, *src_ptr_odd);
+    x0 = to_float(*src_ptr_even);
+    x1 = to_float(*src_ptr_odd);
 
     float r0 = x0 * cos_theta - x1 * sin_theta;
     float r1 = x0 * sin_theta + x1 * cos_theta;
 
     D r0_d, r1_d;
-    ggml_cuda_type_traits<float, D>::convert(r0_d, r0);
-    ggml_cuda_type_traits<float, D>::convert(r1_d, r1);
+    r0_d = from_float<D>(r0);
+    r1_d = from_float<D>(r1);
 
     ((D *)((char *)dst + i0_even * d_nb0 + i1 * d_nb1 + i2 * d_nb2 + i3 * d_nb3))[0] = r0_d;
     ((D *)((char *)dst + i0_odd * d_nb0 + i1 * d_nb1 + i2 * d_nb2 + i3 * d_nb3))[0] = r1_d;
@@ -154,9 +168,7 @@ static __global__ void dsv4_rope_tail_neox_kernel(
     if (n_nope > 0 && i0 < n_nope) {
         const T *src_ptr = (const T *)((const char *)src + i0 * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3);
         D *dst_ptr = (D *)((char *)dst + i0 * d_nb0 + i1 * d_nb1 + i2 * d_nb2 + i3 * d_nb3);
-        D val;
-        ggml_cuda_type_traits<T>::convert(val, *src_ptr);
-        *dst_ptr = val;
+        *dst_ptr = *src_ptr;
         return;
     }
 
@@ -202,15 +214,15 @@ static __global__ void dsv4_rope_tail_neox_kernel(
     const T *src_ptr_b = (const T *)((const char *)src + i0_b * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3);
 
     float x0, x1;
-    ggml_cuda_type_traits<T>::convert(x0, *src_ptr_a);
-    ggml_cuda_type_traits<T>::convert(x1, *src_ptr_b);
+    x0 = to_float(*src_ptr_a);
+    x1 = to_float(*src_ptr_b);
 
     float r0 = x0 * cos_theta - x1 * sin_theta;
     float r1 = x0 * sin_theta + x1 * cos_theta;
 
     D r0_d, r1_d;
-    ggml_cuda_type_traits<float, D>::convert(r0_d, r0);
-    ggml_cuda_type_traits<float, D>::convert(r1_d, r1);
+    r0_d = from_float<D>(r0);
+    r1_d = from_float<D>(r1);
 
     ((D *)((char *)dst + i0_a * d_nb0 + i1 * d_nb1 + i2 * d_nb2 + i3 * d_nb3))[0] = r0_d;
     ((D *)((char *)dst + i0_b * d_nb0 + i1 * d_nb1 + i2 * d_nb2 + i3 * d_nb3))[0] = r1_d;

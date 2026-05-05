@@ -130,7 +130,15 @@ void ggml_cuda_op_dsv4_hc_split_sinkhorn(ggml_backend_cuda_context & ctx, ggml_t
     const ggml_tensor *scale = dst->src[1];
     const ggml_tensor *base = dst->src[2];
 
-    GGML_TENSOR_TERNARY_OP_LOCALS
+    int64_t ne00 = mixes->ne[0];
+    int64_t ne01 = mixes->ne[1];
+    int64_t ne02 = mixes->ne[2];
+    int64_t ne03 = mixes->ne[3];
+    size_t nb00 = mixes->nb[0];
+    size_t nb01 = mixes->nb[1];
+    size_t nb02 = mixes->nb[2];
+    size_t nb03 = mixes->nb[3];
+    size_t mix_hc = ne01 * ne02 * ne03;
 
     int n_hc = ggml_get_op_params_i32(dst, 0);
     int sinkhorn_iters = ggml_get_op_params_i32(dst, 1);

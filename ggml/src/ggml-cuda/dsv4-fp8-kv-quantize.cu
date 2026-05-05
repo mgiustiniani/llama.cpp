@@ -79,8 +79,6 @@ __global__ void dsv4_fp8_kv_quantize_kernel(
 void ggml_cuda_op_dsv4_fp8_kv_quantize(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor *src0 = dst->src[0];
 
-    GGML_TENSOR_BINARY_OP_LOCALS
-
     int64_t n_rot = ggml_get_op_params_i32(dst, 0);
     int64_t head_dim = src0->ne[0];
     int64_t n_nope = head_dim - n_rot;

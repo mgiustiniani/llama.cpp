@@ -24,7 +24,7 @@ __global__ void dsv4_hc_weighted_sum_kernel(
             acc += *x_ptr * *w_ptr;
         }
 
-        *(float *)((char *)dst + d * nb0 + t * (size_t)dst->nb[1]) = acc;
+        *(float *)((char *)dst + d * nb0 + t * nb1) = acc;
     }
 }
 
@@ -32,7 +32,19 @@ void ggml_cuda_op_dsv4_hc_weighted_sum(ggml_backend_cuda_context & ctx, ggml_ten
     const ggml_tensor *x = dst->src[0];
     const ggml_tensor *weights = dst->src[1];
 
-    GGML_TENSOR_BINARY_OP_LOCALS
+    int64_t n_embd0 = x->ne[0];
+    int64_t n_embd1 = x->ne[1] * x->ne[2] * x->ne[3];
+    int64_t ne00 = x->ne[0];
+    int64_t ne01 = x->ne[1];
+    int64_t ne02 = x->ne[2];
+    int64_t ne03 = x->ne[3];
+    size_t nb01 = x->nb[1];
+    size_t nb02 = x->nb[2];
+    int64_t ne10 = weights->ne[0];
+    int64_t ne11 = weights->ne[1];
+    int64_t ne12 = weights->ne[2];
+    size_t nb11 = weights->nb[1];
+    size_t nb12 = weights->nb[2];
 
     GGML_ASSERT(x->type == GGML_TYPE_F32);
     GGML_ASSERT(weights->type == GGML_TYPE_F32);
