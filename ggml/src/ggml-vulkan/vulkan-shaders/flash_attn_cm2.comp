@@ -15,6 +15,7 @@
 #extension GL_KHR_shader_subgroup_ballot : enable
 #extension GL_KHR_shader_subgroup_vote : enable
 #extension GL_EXT_null_initializer : enable
+#extension GL_GOOGLE_include_directive : require
 
 #include "types.glsl"
 #include "flash_attn_base.glsl"

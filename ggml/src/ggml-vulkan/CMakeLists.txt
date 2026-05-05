@@ -68,11 +68,9 @@ if (Vulkan_FOUND)
         "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
     )
 
-    test_shader_extension_support(
-        "GL_NV_cooperative_matrix2"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2.comp"
-        "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
-    )
+    # Coopmat2 detection disabled - requires official glslc from Vulkan SDK
+    set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF CACHE BOOL "" FORCE)
+    message(STATUS "Coopmat2 support disabled (requires official glslc)")
 
     test_shader_extension_support(
         "GL_EXT_integer_dot_product"

@@ -10839,10 +10839,13 @@ static void ggml_vk_dsv4_hc_expand(ggml_backend_vk_context * ctx, vk_context& su
 
 static void ggml_vk_dsv4_fp8_kv_quantize(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
+    uint32_t n_rot = (uint32_t)ggml_get_op_params_i32(dst, 0);
 
     ggml_vk_op_f32<vk_op_dsv4_fp8_kv_quantize_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_DSV4_FP8_KV_QUANTIZE, {
         (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2], (uint32_t)src0->ne[3],
-        (uint32_t)ggml_get_op_params_i32(dst, 0), 0
+        (uint32_t)src0->nb[0], (uint32_t)src0->nb[1], (uint32_t)src0->nb[2], (uint32_t)src0->nb[3],
+        (uint32_t)dst->nb[0], (uint32_t)dst->nb[1], (uint32_t)dst->nb[2], (uint32_t)dst->nb[3],
+        n_rot, 0u
     });
 }
 
@@ -10866,9 +10869,10 @@ static void ggml_vk_dsv4_rope_tail(ggml_backend_vk_context * ctx, vk_context& su
 
     ggml_vk_op_f32<vk_op_dsv4_rope_tail_push_constants>(ctx, subctx, src0, src1, src2, nullptr, dst, GGML_OP_DSV4_ROPE_TAIL, {
         (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2], (uint32_t)src0->ne[3],
+        (uint32_t)src0->nb[0], (uint32_t)src0->nb[1], (uint32_t)src0->nb[2], (uint32_t)src0->nb[3],
+        (uint32_t)dst->nb[0], (uint32_t)dst->nb[1], (uint32_t)dst->nb[2], (uint32_t)dst->nb[3],
         (uint32_t)n_dims, (uint32_t)mode, (uint32_t)n_ctx_orig, (uint32_t)inverse,
-        (uint32_t)freq_base, (uint32_t)freq_scale, (uint32_t)ext_factor, (uint32_t)attn_factor,
-        (uint32_t)beta_fast, (uint32_t)beta_slow, has_src2 ? 1u : 0u
+        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow, has_src2 ? 1u : 0u
     });
 }
 
