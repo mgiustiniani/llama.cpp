@@ -6,6 +6,23 @@ struct rope_corr_dims {
     float v[2];
 };
 
+// YaRN device helpers (inlined from ggml.c + rope.cu for device-side use)
+__device__ static float rope_yarn_ramp(float low, float high, int64_t i0) {
+    float y = (i0 / 2.0f - low) / fmaxf(0.001f, high - low);
+    return 1.0f - fminf(1.0f, fmaxf(0.0f, y));
+}
+
+__device__ static float rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
+    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float)M_PI)) / (2 * logf(base));
+}
+
+__device__ static void rope_yarn_corr_dims_dev(int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, float dims[2]) {
+    float start = floorf(rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
+    float end   =  ceilf(rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
+    dims[0] = fmaxf(0.0f, start);
+    dims[1] = fminf((float)(n_dims - 1), end);
+}
+
 // Half to float / float to half conversion helpers for HIP/CUDA
 template<typename T>
 __device__ inline float to_float(T v) { return (float)v; }
@@ -84,7 +101,7 @@ static __global__ void dsv4_rope_tail_kernel(
 
     // YaRN correction
     rope_corr_dims corr_dims;
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, 1.0f, beta_fast, beta_slow, corr_dims);
+    rope_yarn_corr_dims_dev(n_dims, n_ctx_orig, 1.0f, beta_fast, beta_slow, corr_dims.v);
     float mscale = 1.0f;
     float theta_extrap = theta / freq_scale;
     float ramp_mix = rope_yarn_ramp(corr_dims.v[0], corr_dims.v[1], tail_idx) * ext_factor;
@@ -188,7 +205,7 @@ static __global__ void dsv4_rope_tail_neox_kernel(
     float theta = theta_base * freq * freq_scale;
 
     rope_corr_dims corr_dims;
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, 1.0f, beta_fast, beta_slow, corr_dims);
+    rope_yarn_corr_dims_dev(n_dims, n_ctx_orig, 1.0f, beta_fast, beta_slow, corr_dims.v);
     float mscale = 1.0f;
     float theta_extrap = theta / freq_scale;
     float ramp_mix = rope_yarn_ramp(corr_dims.v[0], corr_dims.v[1], tail_idx) * ext_factor;
