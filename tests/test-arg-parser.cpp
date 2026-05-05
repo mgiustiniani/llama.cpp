@@ -123,10 +123,10 @@ int main(void) {
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
 
-    // --draft cannot be used outside llama-speculative
-    argv = {"binary_name", "--draft", "123"};
+    // --spec-draft-n-max cannot be used outside llama-speculative
+    argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
-    assert(params.speculative.n_max == 123);
+    assert(params.speculative.draft.n_max == 123);
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
