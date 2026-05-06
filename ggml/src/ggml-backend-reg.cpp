@@ -181,6 +181,12 @@ struct ggml_backend_registry {
             return;
         }
 
+            for (auto & entry : backends) {
+            if (entry.reg == reg) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered backend %s (%zu devices)\n",
             __func__, ggml_backend_reg_name(reg), ggml_backend_reg_dev_count(reg));
@@ -197,7 +203,9 @@ struct ggml_backend_registry {
 #endif
         devices.push_back(device);
     }
-
+for (auto & dev : devices) {
+    if (dev == device) { return; }     // evita doppio device
+}
     ggml_backend_reg_t load_backend(const fs::path & path, bool silent) {
         dl_handle_ptr handle { dl_load_library(path) };
         if (!handle) {
