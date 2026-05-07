@@ -202,10 +202,11 @@ struct ggml_backend_registry {
         GGML_LOG_DEBUG("%s: registered device %s (%s)\n", __func__, ggml_backend_dev_name(device), ggml_backend_dev_description(device));
 #endif
         devices.push_back(device);
-    }
-for (auto & dev : devices) {
+        for (auto & dev : devices) {
     if (dev == device) { return; }     // evita doppio device
-}
+} 
+    }
+
     ggml_backend_reg_t load_backend(const fs::path & path, bool silent) {
         dl_handle_ptr handle { dl_load_library(path) };
         if (!handle) {
